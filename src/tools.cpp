@@ -41,7 +41,7 @@ VectorXd Tools::CalculateRMSE(const vector<VectorXd> &estimations,
     return rmse;
 }
 
-// need this when use atan2
+// need this when do angles substraction
 double Tools::normalize_angle(double angle) {
     while (angle > PI) angle -= 2.*PI;
     while (angle < -1.*PI) angle += 2.*PI;
