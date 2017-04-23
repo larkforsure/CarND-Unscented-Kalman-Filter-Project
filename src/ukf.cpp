@@ -79,6 +79,16 @@ Hint: one or more values initialized above might be wildly off...
         double weight = 0.5/(n_aug_+lambda_);
         weights_(i) = weight;
     }
+
+    //laser measurement matrix
+    H_laser_ = MatrixXd(2, 5);
+    H_laser_ << 1, 0, 0, 0, 0,
+             0, 1, 0, 0, 0;
+    
+    //measurement covariance matrix - laser
+    R_laser_ = MatrixXd(2, 2);
+    R_laser_ << std_laspx_*std_laspx_, 0,
+             0, std_laspy_*std_laspy_;
 }
 
 UKF::~UKF() {}
@@ -106,8 +116,9 @@ void UKF::ProcessMeasurement(MeasurementPackage meas_package) {
              */
             double rho = meas_package.raw_measurements_[0];
             double phi = meas_package.raw_measurements_[1];
-            // recorded speed is the object towards rader, not the same thing in state x
-            x_ <<  rho*cos(phi), rho*sin(phi), 0.0, 0.0, 0.0;
+            double rhodot = meas_package.raw_measurements_[0];
+            // not sure whether the phi in meansurement and state were the same thing or not
+            x_ <<  rho*cos(phi), rho*sin(phi), rhodot, 0.0, 0.0;
         }
         else { // if (meas_package.sensor_type_ == MeasurementPackage::LASER) 
             x_ << meas_package.raw_measurements_[0], meas_package.raw_measurements_[1], 0.0, 0.0, 0.0;
@@ -274,9 +285,11 @@ void UKF::UpdateLidar(MeasurementPackage meas_package) {
 
     You'll also need to calculate the lidar NIS.
      */
+
     //set measurement dimension, lidar can measure px,py
     int n_z = 2;
-    
+
+#if 0 
     //create matrix for sigma points in measurement space
     MatrixXd Zsig = MatrixXd(n_z, 2 * n_aug_ + 1);
     Zsig.fill(0.0);
@@ -342,8 +355,56 @@ void UKF::UpdateLidar(MeasurementPackage meas_package) {
     x_ = x_ + K * z_diff;
     P_ = P_ - K * S * K.transpose();
 
+#endif
+     
+    // --- From code review
+    // The measurement model in the LIDAR case is linear. 
+    // That means that we do not need to use the unscented 
+    // transformation at all! Using the linear Kalman filter 
+    // update like in the EKF project should yield the same 
+    // results with less computational overhead. 
+    
+    //predicted state mean
+    x_.fill(0.0);
+    for (int i = 0; i < 2 * n_aug_ + 1; ++i) {  //iterate over sigma points
+        x_ = x_ + weights_(i) * Xsig_pred_.col(i);
+    }
+
+    //predicted state covariance matrix
+    P_.fill(0.0);
+    for (int i = 0; i < 2 * n_aug_ + 1; ++i) {  //iterate over sigma points
+        // state difference
+        VectorXd x_diff = Xsig_pred_.col(i) - x_;
+        //angle normalization
+        x_diff(3) = Tools::normalize_angle(x_diff(3));
+        P_ = P_ + weights_(i) * x_diff * x_diff.transpose() ;
+    }
+
+    // UPDATE-----------------
+
+    //----LOAD measurements
+    VectorXd z = VectorXd(n_z);
+    z << meas_package.raw_measurements_[0], meas_package.raw_measurements_[1];
+
+    const MatrixXd & H_ = H_laser_;
+    const MatrixXd & R_ = R_laser_;
+    // compare predicates with measuments
+    VectorXd y = z - (H_ * x_);  // error
+    MatrixXd Ht = H_.transpose();
+    MatrixXd S = H_ * P_ * Ht + R_;
+    MatrixXd Si = S.inverse();
+    MatrixXd PHt = P_ * Ht;
+    MatrixXd K = PHt * Si;
+
+    // filter out the new state values and uncertainity
+    x_ = x_ + (K * y);
+    long x_size = x_.size();
+    MatrixXd I = MatrixXd::Identity(x_size, x_size);
+    P_ = (I - K * H_) * P_;
+
     //Calculate NIS
-    NIS_laser_ = z_diff.transpose()*S.inverse()*z_diff;
+    //NIS_laser_ = z_diff.transpose()*S.inverse()*z_diff;
+    NIS_laser_ = y.transpose()*Si*y;
 }
 
 /**
